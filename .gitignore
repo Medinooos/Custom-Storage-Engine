@@ -1,0 +1,8 @@
+# Test files for storage.c
+main.c
+storage_test
+db_test
+*.db
+
+# VS Code workspace settings
+.vscode/

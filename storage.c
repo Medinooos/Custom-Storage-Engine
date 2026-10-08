@@ -45,3 +45,58 @@ int insert_record_into_page(DiskPage *page, const uint8_t *record_data,
 
   return slot_id; // slot_id to be stored w/ page_id as index point
 }
+
+int write_page_to_disk(const char *filename, int page_id,
+                       const DiskPage *page) {
+  FILE *file = fopen(filename, "r+b");
+  if (!file) {
+    file = fopen(filename, "w+b");
+    if (!file) {
+      perror("[-] Error opening the file for writing!");
+      return -1;
+    }
+  }
+
+  // Seeking the page's byte offset
+  long offset = (long)page_id * PAGE_SIZE;
+  if (fseek(file, offset, SEEK_SET)) {
+    perror("[-] Error seeking file!");
+    fclose(file);
+    return -1;
+  }
+
+  // Writing page data
+  size_t written = fwrite(page, sizeof(DiskPage), 1, file);
+  fclose(file);
+  if (written != 1) {
+    printf("[-] Error: Failed to write complete page to disk.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+int read_page_from_disk(const char *filename, int page_id, DiskPage *page) {
+  FILE *file = fopen(filename, "rb");
+  if (!file) {
+    perror("[-] Error opening file for reading!");
+    return -1;
+  }
+
+  // Seeking the page's byte offset
+  long offset = (long)page_id * PAGE_SIZE;
+  if (fseek(file, offset, SEEK_SET)) {
+    perror("[-] Error seeking file!");
+    fclose(file);
+    return -1;
+  }
+
+  // Reading page data
+  size_t read_count = fread(page, sizeof(DiskPage), 1, file);
+  fclose(file);
+
+  if (read_count != 1)
+    return -1;
+
+  return 0;
+}

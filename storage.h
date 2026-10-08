@@ -22,4 +22,11 @@ typedef struct {
   char data[PAGE_SIZE];
 } DiskPage;
 
+// Function prototypes
+void init_page(DiskPage *page);
+int insert_record_into_page(DiskPage *page, const uint8_t *record_data,
+                            uint16_t length);
+int write_page_to_disk(const char *filename, int page_id, const DiskPage *page);
+int read_page_from_disk(const char *filename, int page_id, DiskPage *page);
+
 #endif
