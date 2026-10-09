@@ -2,6 +2,7 @@
 main.c
 storage_test
 db_test
+kv_store
 *.db
 
 # VS Code workspace settings

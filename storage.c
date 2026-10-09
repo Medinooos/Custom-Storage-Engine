@@ -100,3 +100,41 @@ int read_page_from_disk(const char *filename, int page_id, DiskPage *page) {
 
   return 0;
 }
+
+void init_index(IndexTable *idx) { idx->count = 0; }
+
+int index_insert(IndexTable *idx, const char *key, int page_id, int slot_id) {
+  if (idx->count >= MAX_INDEX_ENTRIES) {
+    printf("[-] Error: Index table is full.\n");
+    return -1;
+  }
+
+  // Checking if key already exists
+  for (int i = 0; i < idx->count; i++) {
+    if (!strcmp(idx->entries[i].key, key)) {
+      // Updating existing entry location
+      idx->entries[i].page_id = page_id;
+      idx->entries[i].slot_id = slot_id;
+      return 0;
+    }
+  }
+
+  // Adding the new entry
+  strncpy(idx->entries[idx->count].key, key, MAX_KEY_LEN - 1);
+  idx->entries[idx->count].key[MAX_KEY_LEN - 1] = '\0';
+  idx->entries[idx->count].page_id = page_id;
+  idx->entries[idx->count].slot_id = slot_id;
+  idx->count++;
+
+  return 0;
+}
+
+IndexEntry *index_lookup(IndexTable *idx, const char *key) {
+  for (int i = 0; i < idx->count; i++) {
+    if (!strcmp(idx->entries[i].key, key)) {
+      return &idx->entries[i];
+    }
+  }
+
+  return NULL;
+}
