@@ -1,6 +1,7 @@
 #ifndef STORAGE_H
 #define STORAGE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define PAGE_SIZE 4096
@@ -37,6 +38,13 @@ typedef struct {
   int count;
 } IndexTable;
 
+// Metadata prepended to chunks of oversized records
+typedef struct {
+  int32_t next_page_id;
+  int32_t next_slot_id;
+  uint16_t chunk_len;
+} RecordFragmentHeader;
+
 // Function prototypes
 void init_page(DiskPage *page);
 int insert_record_into_page(DiskPage *page, const uint8_t *record_data,
@@ -52,5 +60,11 @@ IndexEntry *index_lookup(IndexTable *idx, const char *key);
 int db_insert(const char *db_filename, DiskPage *active_page,
               int *current_page_id, IndexTable *idx, const char *key,
               const char *value);
+
+int db_insert_large(const char *db_filename, DiskPage *active_page,
+                    int *current_page_id, IndexTable *idx, const char *key,
+                    const uint8_t *data, size_t total_len);
+int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
+                 char *output_buffer, size_t max_out_len);
 
 #endif
