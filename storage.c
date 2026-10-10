@@ -11,20 +11,74 @@ void init_page(DiskPage *page) {
   header->free_space_pointer = PAGE_SIZE;
 }
 
+void compact_page(DiskPage *page) {
+  PageHeader *header = (PageHeader *)page->data;
+  Slot *slots = (Slot *)(page->data + sizeof(PageHeader));
+
+  // Temp buffer for compacted data
+  char temp_data[PAGE_SIZE];
+  uint16_t new_free_space = PAGE_SIZE;
+
+  // Iterating all the slots
+  for (uint16_t i = 0; i < header->item_count; i++) {
+    if (slots[0].length > 0) { // Non-Dead slots
+      char *src = page->data + slots[i].offset;
+
+      // Storing the data into the temp buffer
+      new_free_space -= slots[i].length;
+      memcpy(temp_data + new_free_space, src, slots[i].length);
+
+      // Updating the slot's offset
+      slots[i].offset = new_free_space;
+    }
+  }
+
+  // Copying the compacted data back to original page
+  size_t data_to_copy = PAGE_SIZE - new_free_space;
+  memcpy(page->data + new_free_space, temp_data + new_free_space, data_to_copy);
+
+  // Updating the free space pointer
+  header->free_space_pointer = new_free_space;
+}
+
 int insert_record_into_page(DiskPage *page, const uint8_t *record_data,
                             uint16_t length) {
   PageHeader *header = (PageHeader *)page->data;
-
-  // End of slot directory
   size_t header_size = sizeof(PageHeader);
-  size_t slot_end = header_size + (header->item_count * sizeof(Slot));
+  Slot *slots = (Slot *)(page->data + sizeof(PageHeader));
 
-  // Space required
-  size_t space_needed = sizeof(Slot) + length;
-  size_t current_free_space = header->free_space_pointer - slot_end;
+  // Slot recycling
+  int target_slot_id = -1;
+  for (uint16_t i = 0; i < header->item_count; i++) {
+    if (!slots[i].length) { // Dead slot found
+      target_slot_id = i;
+      break;
+    }
+  }
 
-  if (current_free_space < space_needed)
-    return -1; // Not enough space
+  size_t space_needed = length;
+  if (target_slot_id == -1)
+    space_needed += sizeof(Slot); // In case we're using a new slot
+
+  // Size of the contiguous free space
+  size_t slots_end = header_size + (header->item_count * sizeof(Slot));
+  size_t current_free_space = header->free_space_pointer - slots_end;
+
+  // Checking whether compaction helps if space_needed isn't enough
+  if (current_free_space < space_needed) {
+    // Would-be size after compaction
+    size_t total_live_data_bytes = 0;
+    for (uint16_t i = 0; i < header->item_count; i++)
+      total_live_data_bytes += slots[i].length;
+
+    size_t potential_free_space = PAGE_SIZE - slots_end - total_live_data_bytes;
+
+    if (potential_free_space <
+        space_needed) // Page doesn;t fit, even after compaction
+      return -1;
+
+    compact_page(page);
+  }
 
   // Updating free space pointer
   header->free_space_pointer -= length;
@@ -33,17 +87,17 @@ int insert_record_into_page(DiskPage *page, const uint8_t *record_data,
   // Inserting data
   memcpy(page->data + new_offset, record_data, length);
 
-  // Updating slots
-  Slot *slots = (Slot *)(page->data + header_size);
-  uint16_t slot_id = header->item_count;
-
-  slots[slot_id].offset = new_offset;
-  slots[slot_id].length = length;
-
-  // Increment item count
-  header->item_count++;
-
-  return slot_id; // slot_id to be stored w/ page_id as index point
+  if (target_slot_id != -1) {
+    slots[target_slot_id].offset = new_offset;
+    slots[target_slot_id].length = length;
+    return target_slot_id;
+  } else {
+    uint16_t new_slot_id = header->item_count;
+    slots[new_slot_id].offset = new_offset;
+    slots[new_slot_id].length = length;
+    header->item_count++;
+    return new_slot_id;
+  }
 }
 
 int write_page_to_disk(const char *filename, int page_id,
@@ -205,8 +259,8 @@ int db_insert_large(const char *db_filename, DiskPage *active_page,
     size_t slots_end = sizeof(PageHeader) + (hdr->item_count * sizeof(Slot));
     size_t available_data_space = hdr->free_space_pointer - slots_end;
 
-    // Checking if the the available space is enough for a slot, header and - at
-    // least - 1 byte of data
+    // Checking if the the available space is enough for a slot, header and -
+    // at least - 1 byte of data
     size_t min_needed = sizeof(Slot) + sizeof(RecordFragmentHeader) + 1;
     if (available_data_space < min_needed) {
       write_page_to_disk(db_filename, current_chunck_page, active_page);
@@ -306,4 +360,45 @@ int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
 
   output_buffer[total_copied] = '\0';
   return (int)total_copied;
+}
+
+int db_delete(const char *db_filename, IndexTable *idx, const char *key) {
+  // Looking up the key in the index
+  IndexEntry *entry = index_lookup(idx, key);
+  if (!entry) // Key not found
+    return -1;
+
+  int page_id = entry->page_id;
+  int slot_id = entry->slot_id;
+
+  // Loading the page from disk
+  DiskPage page;
+  if (read_page_from_disk(db_filename, page_id, &page))
+    return -1;
+
+  // Marking the slot w/ 0
+  Slot *slots = (Slot *)(page.data + sizeof(PageHeader));
+  slots[slot_id].length = 0;
+  slots[slot_id].offset = 0;
+
+  // Returning the modified page back to disk
+  if (write_page_to_disk(db_filename, page_id, &page))
+    return -1;
+
+  // Removing the entry from the IndexTable
+  int index_idx = -1;
+  for (int i = 0; i < idx->count; i++) {
+    if (!strcmp(idx->entries[i].key, key)) {
+      index_idx = i;
+      break;
+    }
+  }
+
+  if (index_idx != -1) {
+    for (int i = index_idx; i < idx->count - 1; i++)
+      idx->entries[i] = idx->entries[i + 1];
+    idx->count--;
+  }
+
+  return 0;
 }

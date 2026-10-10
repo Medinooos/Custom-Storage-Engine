@@ -67,4 +67,6 @@ int db_insert_large(const char *db_filename, DiskPage *active_page,
 int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
                  char *output_buffer, size_t max_out_len);
 
+int db_delete(const char *db_filename, IndexTable *idx, const char *key);
+
 #endif

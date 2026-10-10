@@ -1,7 +1,7 @@
 # Test files for storage.c
 main.c
 *.db
-chained_store
+deletion_test
 
 # VS Code workspace settings
 .vscode/
