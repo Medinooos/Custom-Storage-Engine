@@ -138,3 +138,45 @@ IndexEntry *index_lookup(IndexTable *idx, const char *key) {
 
   return NULL;
 }
+
+int db_insert(const char *db_filename, DiskPage *active_page,
+              int *current_page_id, IndexTable *idx, const char *key,
+              const char *value) {
+  char payload[512];
+  int payload_len = snprintf(payload, sizeof(payload), "%s|%s", key, value) + 1;
+
+  if (payload_len > PAGE_SIZE - sizeof(PageHeader)) {
+    printf("[-] Error: Record is too large to ever fit in a single page!\n");
+    return -1;
+  }
+
+  // Trying to insert into current page
+  int slot_id = insert_record_into_page(active_page, (const uint8_t *)payload,
+                                        payload_len);
+
+  // If current page is full
+  if (slot_id < 0) {
+    printf("[*] Page %d is full. Flushing to disk and allocating Page %d...\n",
+           *current_page_id, *current_page_id + 1);
+    // Writing the page to the disk
+    if (write_page_to_disk(db_filename, *current_page_id, active_page))
+      return -1;
+
+    // Creating a new page
+    (*current_page_id)++;
+    init_page(active_page);
+
+    // Inserting into the new page
+    slot_id = insert_record_into_page(active_page, (const uint8_t *)payload,
+                                      payload_len);
+    if (slot_id < 0) {
+      printf(
+          "[-] Critical Error: Record failed to fit even on a fresh page.\n");
+      return -1;
+    }
+  }
+
+  // Registering the key into index table
+  index_insert(idx, key, *current_page_id, slot_id);
+  return 0;
+}

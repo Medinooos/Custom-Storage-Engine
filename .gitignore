@@ -1,8 +1,5 @@
 # Test files for storage.c
 main.c
-storage_test
-db_test
-kv_store
 *.db
 
 # VS Code workspace settings

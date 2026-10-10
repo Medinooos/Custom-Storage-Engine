@@ -49,4 +49,8 @@ void init_index(IndexTable *idx);
 int index_insert(IndexTable *idx, const char *key, int page_id, int slot_id);
 IndexEntry *index_lookup(IndexTable *idx, const char *key);
 
+int db_insert(const char *db_filename, DiskPage *active_page,
+              int *current_page_id, IndexTable *idx, const char *key,
+              const char *value);
+
 #endif
