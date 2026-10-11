@@ -1,7 +1,8 @@
-# Test files for storage.c
+# Test files for and binaries
 main.c
 *.db
 *.wal
+*.so
 
 # VS Code workspace settings
 .vscode/
