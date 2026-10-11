@@ -3,6 +3,36 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
+#include <unistd.h>
+
+#define WAL_MAGIC 0xDEADBEEF
+
+const char *wal_file = "database.wal";
+
+int db_insert(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key, const char *value) {
+  if (WAL_append(wal_file, WAL_OP_INSERT, key, value))
+    return -1;
+
+  return db_insert_internal(db_filename, fsm, idx, key, value);
+}
+
+int db_delete(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key) {
+  if (WAL_append(wal_file, WAL_OP_DELETE, key, NULL))
+    return -1;
+
+  return db_delete_internal(db_filename, fsm, idx, key);
+}
+
+int db_update(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key, const char *new_value) {
+  if (WAL_append(wal_file, WAL_OP_INSERT, key, new_value))
+    return -1;
+
+  return db_insert_internal(db_filename, fsm, idx, key, new_value);
+}
 
 void init_page(DiskPage *page) {
   PageHeader *header = (PageHeader *)page->data;
@@ -357,8 +387,8 @@ int fsm_find_page(FreeSpaceMap *fsm, size_t space_needed) {
   return -1;
 }
 
-int db_insert(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
-              const char *key, const char *value) {
+int db_insert_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key, const char *value) {
   char payload[512];
   int payload_len = snprintf(payload, sizeof(payload), "%s|%s", key, value) + 1;
 
@@ -417,8 +447,8 @@ int db_insert(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
   return 0;
 }
 
-int db_delete(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
-              const char *key) {
+int db_delete_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key) {
   // Looking up the key in the index
   IndexEntry *entry = index_lookup(idx, key);
   if (!entry) // Key not found
@@ -460,5 +490,144 @@ int db_delete(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
     idx->count--;
   }
 
+  return 0;
+}
+
+int db_update_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key,
+                       const char *new_value) {
+  // Looking up the entry
+  IndexEntry *entry = index_lookup(idx, key);
+  if (!entry)
+    return -1;
+
+  // Formatting new payload string
+  char payload[512];
+  int new_payload_len =
+      snprintf(payload, sizeof(payload), "%s|%s", key, new_value) + 1;
+
+  // Loading the target page
+  DiskPage page;
+  if (read_page_from_disk(db_filename, entry->page_id, &page))
+    return -1;
+
+  Slot *slots = (Slot *)(page.data + sizeof(PageHeader));
+  uint16_t old_len = slots[entry->slot_id].length;
+
+  // Conditional patch check
+  if (new_payload_len <= old_len) {
+    // In-Place update
+    memcpy(page.data + slots[entry->slot_id].offset, payload, new_payload_len);
+
+    // Calculating net change in free space
+    int diff = old_len - new_payload_len;
+
+    // Updating slot length
+    slots[entry->slot_id].length = (uint16_t)new_payload_len;
+
+    // Writing updated page back to disk
+    if (write_page_to_disk(db_filename, entry->page_id, &page))
+      return -1;
+
+    // FSM adjustment
+    if (diff > 0)
+      fsm->free_bytes[entry->page_id] += diff;
+
+    return 0;
+  } else {
+    // Deleting and Re-Inserting
+    if (db_delete_internal(db_filename, fsm, idx, key))
+      return -1;
+    return db_insert(db_filename, fsm, idx, key, new_value);
+  }
+}
+
+int WAL_append(const char *wal_filename, WALOpType op, const char *key,
+               const char *value) {
+  FILE *f = fopen(wal_filename, "ab"); // Append in binary mode
+  if (!f)
+    return -1;
+
+  uint16_t key_len = (uint16_t)strlen(key) + 1;
+  uint16_t val_len = value ? (uint16_t)strlen(value) + 1 : 0;
+
+  WALRecordHeader hdr;
+  hdr.magic = WAL_MAGIC;
+  hdr.op_type = (uint8_t)op;
+  hdr.key_len = key_len;
+  hdr.val_len = val_len;
+
+  // Writing header to WAL
+  fwrite(&hdr, sizeof(WALRecordHeader), 1, f);
+
+  // Writing key to WAL
+  fwrite(key, 1, key_len, f);
+
+  // Writing value to WAL
+  if (value && val_len > 0)
+    fwrite(value, 1, val_len, f);
+
+  fflush(f);
+  fsync(fileno(f));
+  fclose(f);
+  return 0;
+}
+
+int recover_from_wal(const char *wal_filename, const char *db_filename,
+                     FreeSpaceMap *fsm, IndexTable *idx) {
+  FILE *f = fopen(wal_filename, "rb");
+  if (!f)
+    return 0;
+
+  printf("[*] WAL detected. Starting crash recovery replay...\n");
+
+  WALRecordHeader hdr;
+  while (fread(&hdr, sizeof(WALRecordHeader), 1, f) == 1) {
+    // Validating magic number to protect against partial/corrupted trailing
+    // writes
+    if (hdr.magic != WAL_MAGIC) {
+      printf("[!] Warning: WAL corruption detected. Stopping replay.\n");
+      break;
+    }
+
+    char key_buf[256];
+    char val_buf[512];
+
+    if (hdr.key_len > sizeof(key_buf) || hdr.val_len > sizeof(val_buf)) {
+      printf("[!] Error: WAL record payload too large for buffers.\n");
+      break;
+    }
+
+    // Reading the key from WAL
+    if (fread(key_buf, 1, hdr.key_len, f) != hdr.key_len)
+      break;
+
+    // Reading the value from WAL
+    if (hdr.val_len > 0) {
+      if (fread(val_buf, 1, hdr.val_len, f) != hdr.val_len)
+        break;
+    }
+
+    // Replaying the operation
+    switch (hdr.op_type) {
+    case WAL_OP_INSERT:
+      db_insert_internal(db_filename, fsm, idx, key_buf,
+                         hdr.val_len > 0 ? val_buf : NULL);
+      break;
+    case WAL_OP_UPDATE:
+      db_update_internal(db_filename, fsm, idx, key_buf,
+                         hdr.val_len > 0 ? val_buf : NULL);
+      break;
+    case WAL_OP_DELETE:
+      db_delete_internal(db_filename, fsm, idx, key_buf);
+      break;
+    default:
+      printf("[!] Unknown operation type in WAL: %d\n", hdr.op_type);
+      break;
+    }
+  }
+
+  fclose(f);
+  printf("[+] WAL recovery completed successfully!\n");
   return 0;
 }
