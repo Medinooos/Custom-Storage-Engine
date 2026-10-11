@@ -1,5 +1,4 @@
 # Test files for and binaries
-main.c
 *.db
 *.wal
 *.so
