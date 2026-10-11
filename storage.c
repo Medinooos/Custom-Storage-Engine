@@ -11,6 +11,15 @@ void init_page(DiskPage *page) {
   header->free_space_pointer = PAGE_SIZE;
 }
 
+void init_index(IndexTable *idx) { idx->count = 0; }
+
+void init_fsm(FreeSpaceMap *fsm) {
+  fsm->last_page_id = 0;
+  for (int i = 0; i < MAX_PAGES; i++) {
+    fsm->free_bytes[i] = PAGE_SIZE - sizeof(PageHeader);
+  }
+}
+
 void compact_page(DiskPage *page) {
   PageHeader *header = (PageHeader *)page->data;
   Slot *slots = (Slot *)(page->data + sizeof(PageHeader));
@@ -155,8 +164,6 @@ int read_page_from_disk(const char *filename, int page_id, DiskPage *page) {
   return 0;
 }
 
-void init_index(IndexTable *idx) { idx->count = 0; }
-
 int index_insert(IndexTable *idx, const char *key, int page_id, int slot_id) {
   if (idx->count >= MAX_INDEX_ENTRIES) {
     printf("[-] Error: Index table is full.\n");
@@ -193,133 +200,113 @@ IndexEntry *index_lookup(IndexTable *idx, const char *key) {
   return NULL;
 }
 
-int db_insert(const char *db_filename, DiskPage *active_page,
-              int *current_page_id, IndexTable *idx, const char *key,
-              const char *value) {
-  char payload[512];
-  int payload_len = snprintf(payload, sizeof(payload), "%s|%s", key, value) + 1;
-
-  if (payload_len > PAGE_SIZE - sizeof(PageHeader)) {
-    printf("[-] Error: Record is too large to ever fit in a single page!\n");
-    return -1;
-  }
-
-  // Trying to insert into current page
-  int slot_id = insert_record_into_page(active_page, (const uint8_t *)payload,
-                                        payload_len);
-
-  // If current page is full
-  if (slot_id < 0) {
-    printf("[*] Page %d is full. Flushing to disk and allocating Page %d...\n",
-           *current_page_id, *current_page_id + 1);
-    // Writing the page to the disk
-    if (write_page_to_disk(db_filename, *current_page_id, active_page))
-      return -1;
-
-    // Creating a new page
-    (*current_page_id)++;
-    init_page(active_page);
-
-    // Inserting into the new page
-    slot_id = insert_record_into_page(active_page, (const uint8_t *)payload,
-                                      payload_len);
-    if (slot_id < 0) {
-      printf(
-          "[-] Critical Error: Record failed to fit even on a fresh page.\n");
-      return -1;
-    }
-  }
-
-  // Registering the key into index table
-  index_insert(idx, key, *current_page_id, slot_id);
-  return 0;
-}
-
-int db_insert_large(const char *db_filename, DiskPage *active_page,
-                    int *current_page_id, IndexTable *idx, const char *key,
-                    const uint8_t *data, size_t total_len) {
+int db_insert_large(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+                    const char *key, const uint8_t *data, size_t total_len) {
   size_t bytes_written = 0;
-  int first_page_id = *current_page_id;
+  int first_page_id = -1;
   int first_slot_id = -1;
 
   int prev_page_id = -1;
   int prev_slot_id = -1;
-  char *prev_page_data_ptr = NULL; // To back-patch pointers if needed
 
-  // Keeping track of the previous fragment's location, to update its pointers
-  // later
-  int current_chunck_page = *current_page_id;
+  // Allocating new pages beyond the current max page in the FSM
+  int current_chunk_page = fsm->last_page_id + 1;
+  if (current_chunk_page >= MAX_PAGES) {
+    printf("[-] Error: Max page limit reached for large insert.\n");
+    return -1;
+  }
 
-  // Temporary holder
+  DiskPage active_page;
+  init_page(&active_page);
+
   char fragment_buf[PAGE_SIZE];
 
   while (bytes_written < total_len) {
-    // Calculating how much we can fit in the current page
-    PageHeader *hdr = (PageHeader *)active_page->data;
+    PageHeader *hdr = (PageHeader *)active_page.data;
     size_t slots_end = sizeof(PageHeader) + (hdr->item_count * sizeof(Slot));
     size_t available_data_space = hdr->free_space_pointer - slots_end;
 
-    // Checking if the the available space is enough for a slot, header and -
-    // at least - 1 byte of data
+    // Minimum space needed for slot + fragment header + at least 1 byte of data
     size_t min_needed = sizeof(Slot) + sizeof(RecordFragmentHeader) + 1;
     if (available_data_space < min_needed) {
-      write_page_to_disk(db_filename, current_chunck_page, active_page);
+      // Flush current full page to disk
+      write_page_to_disk(db_filename, current_chunk_page, &active_page);
 
-      // Incrementing page ID
-      current_chunck_page++;
-      init_page(active_page);
-      *current_page_id = current_chunck_page;
+      // Advance to next page
+      current_chunk_page++;
+      if (current_chunk_page >= MAX_PAGES) {
+        printf("[-] Error: Max page limit reached during chaining.\n");
+        return -1;
+      }
+      init_page(&active_page);
 
-      hdr = (PageHeader *)active_page->data;
+      hdr = (PageHeader *)active_page.data;
       slots_end = sizeof(PageHeader) + (hdr->item_count * sizeof(Slot));
       available_data_space = hdr->free_space_pointer - slots_end;
     }
 
-    // Determining nmbr bytes of the remaining data fits
+    // Calculating max payload for this chunk
     size_t max_payload_here =
-        available_data_space - sizeof(RecordFragmentHeader) - sizeof(Slot);
+        available_data_space - sizeof(Slot) - sizeof(RecordFragmentHeader);
     size_t bytes_to_write_now = (total_len - bytes_written < max_payload_here)
                                     ? (total_len - bytes_written)
                                     : max_payload_here;
 
-    // Preparing a fragment
+    // Constructing fragment header
     RecordFragmentHeader frag_hdr;
     frag_hdr.next_page_id = -1;
     frag_hdr.next_slot_id = -1;
     frag_hdr.chunk_len = (uint16_t)bytes_to_write_now;
+
+    // Packing header + data payload into fragment buffer
     memcpy(fragment_buf, &frag_hdr, sizeof(RecordFragmentHeader));
     memcpy(fragment_buf + sizeof(RecordFragmentHeader), data + bytes_written,
            bytes_to_write_now);
     size_t total_fragment_size =
         sizeof(RecordFragmentHeader) + bytes_to_write_now;
 
-    // Inserting the fragment into the active page
-    int slot_id = insert_record_into_page(
-        active_page, (const uint8_t *)fragment_buf, total_fragment_size);
-    if (slot_id < 0)
-      return -1; // Should not happen, just a precaution
+    // Inserting fragment into page
+    int slot_id =
+        insert_record_into_page(&active_page, (const uint8_t *)fragment_buf,
+                                (uint16_t)total_fragment_size);
+    if (slot_id < 0) {
+      return -1;
+    }
+
+    // Calculating the exact physical space consumed in this page
+    size_t total_consumed = total_fragment_size + sizeof(Slot);
+    fsm->free_bytes[current_chunk_page] -= (uint16_t)total_consumed;
 
     if (first_slot_id == -1) {
-      first_page_id = current_chunck_page;
+      first_page_id = current_chunk_page;
       first_slot_id = slot_id;
     } else {
+      // Back-patching the previous fragment's next pointers on disk
       DiskPage prev_page;
       read_page_from_disk(db_filename, prev_page_id, &prev_page);
-      Slot *prev_slots = (Slot *)(prev_page.data + sizeof(PageHeader));
-      RecordFragmentHeader *prev_frag =
+      Slot *p_slots = (Slot *)(prev_page.data + sizeof(PageHeader));
+      RecordFragmentHeader *p_frag =
           (RecordFragmentHeader *)(prev_page.data +
-                                   prev_slots[prev_slot_id].offset);
-      prev_frag->next_page_id = current_chunck_page;
-      prev_frag->next_slot_id = slot_id;
+                                   p_slots[prev_slot_id].offset);
+      p_frag->next_page_id = current_chunk_page;
+      p_frag->next_slot_id = slot_id;
       write_page_to_disk(db_filename, prev_page_id, &prev_page);
     }
 
-    prev_page_id = current_chunck_page;
+    prev_page_id = current_chunk_page;
     prev_slot_id = slot_id;
     bytes_written += bytes_to_write_now;
   }
 
-  // Registering the starting point
+  // Writing the final active page to disk
+  write_page_to_disk(db_filename, current_chunk_page, &active_page);
+
+  // Updating FSM's last_page_id
+  if (current_chunk_page > fsm->last_page_id) {
+    fsm->last_page_id = current_chunk_page;
+  }
+
+  // Registering starting point of the massive record in the index table
   index_insert(idx, key, first_page_id, first_slot_id);
   return 0;
 }
@@ -362,7 +349,76 @@ int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
   return (int)total_copied;
 }
 
-int db_delete(const char *db_filename, IndexTable *idx, const char *key) {
+int fsm_find_page(FreeSpaceMap *fsm, size_t space_needed) {
+  for (int i = 0; i <= fsm->last_page_id; i++) {
+    if (fsm->free_bytes[i] >= space_needed)
+      return -i;
+  }
+  return -1;
+}
+
+int db_insert(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key, const char *value) {
+  char payload[512];
+  int payload_len = snprintf(payload, sizeof(payload), "%s|%s", key, value) + 1;
+
+  // Checking whether the record is too large for a single page
+  size_t max_single_page_capacity =
+      PAGE_SIZE - sizeof(PageHeader) - sizeof(Slot);
+
+  if (payload_len > max_single_page_capacity)
+    return db_insert_large(db_filename, fsm, idx, key, (const uint8_t *)value,
+                           strlen(value) + 1);
+
+  // Checking whether any page has enough space
+  int target_page_id = fsm_find_page(fsm, payload_len + sizeof(Slot));
+  DiskPage target_page;
+
+  if (target_page_id != -1) {
+    if (read_page_from_disk(db_filename, target_page_id, &target_page))
+      init_page(&target_page);
+  } else {
+    // If no page has enough space, allocating a new page at the end
+    target_page_id = fsm->last_page_id + 1;
+    if (target_page_id >= MAX_PAGES) {
+      printf("[-] Error: Database is full, limit reached.\n");
+      return -1;
+    }
+    init_page(&target_page);
+    fsm->last_page_id = target_page_id;
+    printf("[*] Allocated new page %d", target_page_id);
+  }
+
+  // Checking for dead slots to recycle
+  PageHeader *hdr = (PageHeader *)target_page.data;
+  Slot *slots = (Slot *)(target_page.data + sizeof(PageHeader));
+  int dead_slot = -1;
+  for (int i = 0; i < hdr->item_count; i++) {
+    if (slots[i].length == 0) {
+      dead_slot = i;
+      break;
+    }
+  }
+
+  size_t total_consumed = payload_len + (dead_slot != -1 ? 0 : sizeof(Slot));
+
+  // Inserting into target page
+  int slot_id = insert_record_into_page(&target_page, (const uint8_t *)payload,
+                                        payload_len);
+  if (slot_id < 0)
+    return -1;
+
+  // Updating FSM after insertion
+  fsm->free_bytes[target_page_id] -= total_consumed;
+
+  // Write to disk and registering the key in the index table
+  write_page_to_disk(db_filename, target_page_id, &target_page);
+  index_insert(idx, key, target_page_id, slot_id);
+  return 0;
+}
+
+int db_delete(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key) {
   // Looking up the key in the index
   IndexEntry *entry = index_lookup(idx, key);
   if (!entry) // Key not found
@@ -378,12 +434,16 @@ int db_delete(const char *db_filename, IndexTable *idx, const char *key) {
 
   // Marking the slot w/ 0
   Slot *slots = (Slot *)(page.data + sizeof(PageHeader));
+  uint16_t deleted_len = slots[slot_id].length;
   slots[slot_id].length = 0;
   slots[slot_id].offset = 0;
 
   // Returning the modified page back to disk
   if (write_page_to_disk(db_filename, page_id, &page))
     return -1;
+
+  // Updating the FSM
+  fsm->free_bytes[page_id] += deleted_len;
 
   // Removing the entry from the IndexTable
   int index_idx = -1;

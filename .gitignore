@@ -1,7 +1,7 @@
 # Test files for storage.c
 main.c
 *.db
-deletion_test
+storage_engine
 
 # VS Code workspace settings
 .vscode/
