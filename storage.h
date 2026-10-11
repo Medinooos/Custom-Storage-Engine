@@ -76,25 +76,34 @@ void init_index(IndexTable *idx);
 int index_insert(IndexTable *idx, const char *key, int page_id, int slot_id);
 IndexEntry *index_lookup(IndexTable *idx, const char *key);
 
-int db_insert_internal(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
-              const char *key, const char *value);
+int db_insert_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key, const char *value);
 
 int db_insert_large(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
                     const char *key, const uint8_t *data, size_t total_len);
 
-int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
+int db_get(const char *db_filename, IndexTable *idx, const char *key,
                  char *output_buffer, size_t max_out_len);
 
-int db_delete_internal(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
-              const char *key);
+int db_delete_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key);
 
 void init_fsm(FreeSpaceMap *fsm);
 int fsm_find_page(FreeSpaceMap *fsm, size_t space_needed);
 
-int db_update_internal(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
-              const char *key, const char *new_value);
+int db_update_internal(const char *db_filename, FreeSpaceMap *fsm,
+                       IndexTable *idx, const char *key, const char *new_value);
 
 // WAL prototypes
+int db_insert(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key, const char *value);
+
+int db_delete(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key);
+
+int db_update(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
+              const char *key, const char *new_value);
+
 int WAL_append(const char *wal_filename, WALOpType op, const char *key,
                const char *value);
 int recover_from_wal(const char *wal_filename, const char *db_filename,

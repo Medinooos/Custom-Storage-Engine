@@ -341,42 +341,70 @@ int db_insert_large(const char *db_filename, FreeSpaceMap *fsm, IndexTable *idx,
   return 0;
 }
 
-int db_get_large(const char *db_filename, IndexTable *idx, const char *key,
-                 char *output_buffer, size_t max_out_len) {
+int db_get(const char *db_filename, IndexTable *idx, const char *key,
+           char *output_buffer, size_t max_out_len) {
   IndexEntry *entry = index_lookup(idx, key);
   if (!entry)
     return -1;
 
-  int curr_page = entry->page_id;
-  int curr_slot = entry->slot_id;
-  size_t total_copied = 0;
-
   DiskPage page;
+  if (read_page_from_disk(db_filename, entry->page_id, &page) != 0)
+    return -1;
 
-  while (curr_page != -1 && curr_slot != -1) {
-    if (read_page_from_disk(db_filename, curr_page, &page))
+  Slot *slots = (Slot *)(page.data + sizeof(PageHeader));
+  char *record_ptr = page.data + slots[entry->slot_id].offset;
+  uint16_t record_len = slots[entry->slot_id].length;
+
+  // Checking if this record is a chained large record or a single-page record.
+  int32_t possible_next_page;
+  memcpy(&possible_next_page, record_ptr, sizeof(int32_t));
+
+  // Checking if next_page_id is a valid page index or -1.
+  if (possible_next_page == -1 ||
+      (possible_next_page >= 0 && possible_next_page < MAX_PAGES)) {
+    // Retrieving a large record
+    int curr_page = entry->page_id;
+    int curr_slot = entry->slot_id;
+    size_t total_copied = 0;
+
+    while (curr_page != -1 && curr_slot != -1) {
+      if (read_page_from_disk(db_filename, curr_page, &page))
+        return -1;
+
+      Slot *p_slots = (Slot *)(page.data + sizeof(PageHeader));
+      RecordFragmentHeader *frag =
+          (RecordFragmentHeader *)(page.data + p_slots[curr_slot].offset);
+
+      if (total_copied + frag->chunk_len >= max_out_len)
+        return -1; // Output buffer too small
+
+      char *chunk_data_ptr =
+          page.data + p_slots[curr_slot].offset + sizeof(RecordFragmentHeader);
+      memcpy(output_buffer + total_copied, chunk_data_ptr, frag->chunk_len);
+      total_copied += frag->chunk_len;
+
+      curr_page = frag->next_page_id;
+      curr_slot = frag->next_slot_id;
+    }
+
+    output_buffer[total_copied] = '\0';
+    return (int)total_copied;
+  } else {
+    // Retrieving a single page record
+    char *pipe = memchr(record_ptr, '|', record_len);
+    if (!pipe)
       return -1;
 
-    Slot *slots = (Slot *)(page.data + sizeof(PageHeader));
-    RecordFragmentHeader *frag =
-        (RecordFragmentHeader *)(page.data + slots[curr_slot].offset);
+    char *value_ptr = pipe + 1;
+    size_t value_len = record_len - (value_ptr - record_ptr);
 
-    if (total_copied + frag->chunk_len >= max_out_len)
-      return -1; // Output buffer too small
+    if (value_len >= max_out_len)
+      return -1;
 
-    // Copying the chunk data into the output buffer
-    char *chunk_data_ptr =
-        page.data + slots[curr_slot].offset + sizeof(RecordFragmentHeader);
-    memcpy(output_buffer + total_copied, chunk_data_ptr, frag->chunk_len);
-    total_copied += frag->chunk_len;
-
-    // Advancing to the next fragment
-    curr_page = frag->next_page_id;
-    curr_slot = frag->next_slot_id;
+    memcpy(output_buffer, value_ptr, value_len);
+    output_buffer[value_len] = '\0';
+    return (int)value_len;
   }
-
-  output_buffer[total_copied] = '\0';
-  return (int)total_copied;
 }
 
 int fsm_find_page(FreeSpaceMap *fsm, size_t space_needed) {
