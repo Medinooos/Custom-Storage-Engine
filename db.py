@@ -2,11 +2,12 @@ import ctypes as ct
 import os
 
 # Loading the compiled C shared library
-lib_name = "./libstorage.so"
-if not os.path.exists(lib_name):
-    raise FileNotFoundError(f"Could not find {lib_name}. Compile your C code first!")
+base_dir = os.path.dirname(os.path.abspath(__file__))
+lib_path = os.path.join(base_dir, "libstorage.so")
+if not os.path.exists(lib_path):
+    raise FileNotFoundError(f"Could not find {lib_path}. Compile your C code first!")
 
-_lib = ct.CDLL(lib_name)
+_lib = ct.CDLL(lib_path)
 
 # Defining matching C structures in ctypes
 class FreeSpaceMap(ct.Structure):
