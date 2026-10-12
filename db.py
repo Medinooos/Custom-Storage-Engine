@@ -11,7 +11,7 @@ _lib = ct.CDLL(lib_name)
 # Defining matching C structures in ctypes
 class FreeSpaceMap(ct.Structure):
     _fields_ = [
-        ("free_bytes", ct.c_uint16*1024),
+        ("free_bytes", ct.c_uint16 * 1024),
         ("last_page_id", ct.c_int)
     ]
 
@@ -24,7 +24,7 @@ class IndexEntry(ct.Structure):
 
 class IndexTable(ct.Structure):
     _fields_ = [
-        ("entries", IndexEntry*1024),
+        ("entries", IndexEntry * 1000),
         ("count", ct.c_int)
     ]
 
