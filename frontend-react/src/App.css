@@ -1,0 +1,20 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a;
+    color: #f8fafc;
+    margin: 0;
+    padding: 30px;
+}
+.container { max-width: 1000px; margin: auto; }
+h1 { margin-bottom: 5px; color: #38bdf8; }
+.subtitle { color: #94a3b8; margin-bottom: 30px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+.card { background: #1e293b; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5); border: 1px solid #334155; }
+.full-width { grid-column: 1 / -1; margin-top: 20px; }
+input, textarea, button { width: 100%; margin-top: 12px; padding: 12px; background: #0f172a; border: 1px solid #475569; color: #fff; border-radius: 6px; box-sizing: border-box; font-size: 14px; }
+textarea { resize: vertical; height: 80px; }
+button { background: #0ea5e9; cursor: pointer; font-weight: 600; border: none; transition: background 0.2s; }
+button:hover { background: #0284c7; }
+.btn-danger { background: #ef4444; }
+.btn-danger:hover { background: #dc2626; }
+.result-box, pre { margin-top: 12px; padding: 12px; background: #0f172a; border-left: 4px solid #0ea5e9; font-family: monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; border-radius: 4px; color: #cbd5e1; }

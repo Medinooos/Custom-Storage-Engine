@@ -9,3 +9,8 @@
 # Python cache and virtual environment files
 __pycache__/
 .venv/
+
+# React / node modules
+node_modules/
+.vite/
+dist/
