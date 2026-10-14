@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PyC-KVStore Control Panel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>PyC-KVStore Dashboard</h1>
+        <p class="subtitle">Vanilla JavaScript Interface</p>
+
+        <div class="grid">
+            <!-- Insertion/Update -->
+            <div class="card">
+                <h2>Insert / Update</h2>
+                <input type="text" id="put-key" placeholder="Key">
+                <textarea id="put-value" placeholder="Value (supports massive input)"></textarea>
+                <button onclick="handlePut()">Save Record</button>
+            </div>
+
+            <!-- Lookup -->
+            <div class="card">
+                <h2>Lookup Record</h2>
+                <input type="text" id="get-key" placeholder="Key">
+                <button onclick="handleGet()">Fetch Value</button>
+                <div id="get-result" class="result-box">Result will appear here...</div>
+            </div>
+
+            <!-- Deletion -->
+            <div class="card">
+                <h2>Delete Record</h2>
+                <input type="text" id="del-key" placeholder="Key">
+                <button onclick="handleDelete()" class="btn-danger">Delete Key</button>
+            </div>
+        </div>
+
+        <!-- Telemetry & FSM stats-->
+        <div class="card full-width">
+            <h2>Storage Telemetry & FSM Stats</h2>
+            <button onclick="loadStats()">Refresh Database Stats</button>
+            <pre id="stats-output">Click refresh to load storage metrics...</pre>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
