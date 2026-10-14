@@ -48,3 +48,44 @@ To build the dynamic library required by Python, run the following command in yo
 * **Windows (MinGW):**
   ```bash
   gcc -shared -fPIC storage.c -o libstorage.dll
+
+---
+
+## 🌐 Full-Stack & Desktop Extensions
+
+The project has evolved from a standalone C core into a multi-interface storage architecture:
+
+* **Backend API Bridge (`/backend`)**: A lightweight **FastAPI** service wrapper enabling RESTful access (`/put`, `/get`, `/delete`, `/update`, `/stats`) with CORS support and Pydantic validation.
+* **Vanilla JavaScript Dashboard (`/frontend-vanilla`)**: A lightweight, zero-build web interface using asynchronous `fetch` calls and DOM manipulation.
+* **React Dashboard (`/frontend-react`)**: A modern component-based web interface built with **Vite** and React state hooks (`useState`, `useEffect`).
+* **PyQt5 Visual Manager (`/frontend-desktop`)**: *[In Progress]* A native desktop database workbench featuring real-time Free Space Map (FSM) analytics, page inspection, and integrated **OpenCV/Matplotlib** data visualization.
+
+---
+
+## 📂 Updated Monorepo Directory Structure
+
+```text
+PyC-KVStore/
+│
+├── storage.h               # C Core headers
+├── storage.c               # C Engine implementation
+├── libstorage.so           # Compiled shared library
+├── db.py                   # Python ctypes wrapper
+├── database.db             # Persistent data file
+├── database.wal            # Write-Ahead Log
+│
+├── backend/                # FastAPI REST API Bridge
+│   └── main.py
+│
+├── frontend-vanilla/       # Vanilla JS Web Dashboard
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+│
+├── frontend-react/         # Modern React Web Dashboard
+│   ├── src/
+│   ├── public/
+│   └── package.json
+│
+├── README.md
+└── .gitignore
